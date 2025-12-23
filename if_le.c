@@ -158,6 +158,15 @@ lewrcsr(sc, port, val)
 	ioout(sc->sc_rdp, val);
 }
 
+integrate void
+lewrbcr(sc, port, val)
+	struct le_softc *sc;
+	u_int16_t port, val;
+{
+	ioout(sc->sc_rap, port);
+	ioout(sc->sc_bdp, val);
+}
+
 integrate u_int16_t
 lerdcsr(sc, port)
 	struct le_softc *sc;
@@ -172,6 +181,166 @@ lerdcsr(sc, port)
 	/*printf("leaix: read CSR%d: 0x%04x\n", port, val);*/
 	return (val);
 }
+
+integrate u_int16_t
+lerdbcr(sc, port)
+	struct le_softc *sc;
+	u_int16_t port;
+{
+	u_int16_t val;
+
+        ioout(sc->sc_rap, port);
+	val = ioin(sc->sc_bdp);
+	/*printf("leaix: read BCR%d: 0x%04x\n", port, val);*/
+	return (val);
+}
+
+
+#define PHY_SHIFT 5
+#define NPHY 32
+
+#define MII_BMCR 0
+#define MII_BMSR 1
+
+
+
+#define BMSR_EXTSTAT 0x100 /* extended status */
+#define BMSR_MEDIAMASK 0xFE00 /* all the flags that indicate a media type */
+
+integrate u_int16_t
+lerdmiireg(sc, phy, reg)
+	struct le_softc *sc;
+	int phy;
+	int reg;
+{
+	u_int16_t ret;
+
+	lewrbcr(sc, 33, reg | (phy << PHY_SHIFT));
+	ret = lerdbcr(sc, 34 );
+	if (ret == 0xffff) return 0;
+
+	return ret;
+}
+
+integrate void
+lewrmiireg(sc, phy, reg, val)
+	struct le_softc *sc;
+	int phy;
+	int reg;
+	u_int16_t val;
+{
+	lewrbcr(sc, 33, reg | (phy << PHY_SHIFT));
+	lewrbcr(sc, 34, val);
+}
+
+#define BMSR_LINK 4
+
+#define MII_ANAR 0x04
+
+#define BMCR_ISOLATE     0x0400
+
+integrate void
+show_phy(sc, phyno)
+	struct le_softc *sc;
+	int phyno;
+{
+	u_int16_t bmsr, bmcr, anar;
+	bmsr = lerdmiireg(sc, phyno, MII_BMSR);
+	bmcr = lerdmiireg(sc, phyno, MII_BMCR);
+	anar = lerdmiireg(sc, phyno, MII_ANAR);
+	printf("leaix: phy %d: BMSR 0x%04x BMCR 0x%04x ANAR 0x%04x\n", phyno, bmsr, bmcr, anar);
+}
+
+integrate void
+leormiireg(sc, phyno, port, flags)
+	struct le_softc *sc;
+	int phyno;
+	u_int16_t port, flags;
+{
+	lewrmiireg(sc, phyno, port,
+		lerdmiireg(sc, phyno, port) | flags);
+}
+
+integrate void
+leandmiireg(sc, phyno, port, mask)
+	struct le_softc *sc;
+	int phyno;
+	u_int16_t port, mask;
+{
+	lewrmiireg(sc, phyno, port,
+		lerdmiireg(sc, phyno, port) & mask);
+}
+
+integrate void
+isolate_phy(sc, phyno)
+	struct le_softc *sc;
+	int phyno;
+{
+	printf("leaix: isolating phy %d\n", phyno);
+	leormiireg(sc, phyno, MII_BMCR, BMCR_ISOLATE);
+	show_phy(sc, phyno);
+}
+
+integrate void
+deisolate_phy(sc, phyno)
+	struct le_softc *sc;
+	int phyno;
+{
+	printf("leaix: deisolating phy %d\n", phyno);
+	leandmiireg(sc, phyno, MII_BMCR, ~BMCR_ISOLATE);
+	show_phy(sc, phyno);
+}
+
+
+integrate void
+mii_attach(sc)
+	struct le_softc *sc;
+{
+	int phyno;
+	u_int16_t ret;
+	int have_phy_link;
+	int first_phy_with_link = -1;
+	int first_present_phy = -1;
+
+	printf("leaix: checking for phy\n");
+	for (phyno = 0; phyno <= (NPHY - 1); phyno++) {
+		ret = lerdmiireg(sc, phyno, MII_BMSR);
+		if ((ret & (BMSR_EXTSTAT | BMSR_MEDIAMASK)) == 0) {
+		    /* skip where nothing indicates a phy is present */
+			continue;
+		}
+
+		if (first_present_phy == -1) {
+		    first_present_phy = phyno;
+		}
+
+		/* read the reg again for potentially latch low link value to update */
+		ret = lerdmiireg(sc, phyno, MII_BMSR);
+
+		have_phy_link = (ret & BMSR_LINK) != 0;
+		printf("leaix: phy at %d, link=%d\n", phyno, have_phy_link);
+		show_phy(sc, phyno);
+
+		if (have_phy_link && (first_phy_with_link == -1)) {
+		    /* we'll use this phy */
+		    first_phy_with_link = phyno;
+		} else {
+		    isolate_phy(sc, phyno);
+		}
+
+	}
+
+    if (first_phy_with_link != -1) {
+        deisolate_phy(sc, first_phy_with_link);
+    } else {
+        printf("leaix: no phy with link found\n");
+        if (first_present_phy != -1) {
+            printf("leaix: falling back to first present phy %d\n", first_present_phy);
+            deisolate_phy(sc, first_present_phy);
+        }
+    }
+}
+
 
 int
 leprobe(/* parent, */ match, aux)
@@ -219,6 +388,7 @@ depca_probe(sc, ia)
 
 	sc->sc_rap = iobase + DEPCA_RAP;
 	sc->sc_rdp = iobase + DEPCA_RDP;
+	sc->sc_bdp = iobase + DEPCA_BDP;
 	sc->sc_card = DEPCA;
 
 	if (lance_probe(sc) == 0)
@@ -300,6 +470,7 @@ ne2100_probe(sc, ia)
 
 	sc->sc_rap = iobase + NE2100_RAP;
 	sc->sc_rdp = iobase + NE2100_RDP;
+	sc->sc_bdp = iobase + NE2100_BDP;
 #if DEBUG_STARTUP
 	printf("using io addresses RAP 0x%04x RDP 0x%04x\n", sc->sc_rap, 
 		sc->sc_rdp);
@@ -331,6 +502,7 @@ bicc_probe(sc, ia)
 
 	sc->sc_rap = iobase + BICC_RAP;
 	sc->sc_rdp = iobase + BICC_RDP;
+	sc->sc_bdp = iobase + BICC_BDP;
 	sc->sc_card = BICC;
 
 	if (lance_probe(sc) == 0)
@@ -345,6 +517,60 @@ bicc_probe(sc, ia)
 	ia->ia_iosize = 16;
 	return 1;
 }
+
+integrate unsigned int
+le_read_chip_id(sc)
+    struct le_softc *sc;
+{
+    unsigned int lo, hi;
+    lo = lerdcsr(sc, 88);
+    hi = lerdcsr(sc, 89);
+    return (hi << 16) | lo;
+}
+
+
+integrate int
+le_have_mii_support(sc)
+	struct le_softc *sc;
+{
+    switch (CHIPID_PARTID(sc->sc_chip_id)) {
+        case PARTID_Am79c970:
+        case PARTID_Am79c970A:
+            return 0;
+
+        case PARTID_Am79c971:
+        case PARTID_Am79c972:
+        case PARTID_Am79c973:
+        case PARTID_Am79c975:
+            return 1;
+
+        default:
+            return 1;
+    }
+}
+
+integrate char *
+le_chip_name(sc)
+	struct le_softc *sc;
+{
+    switch (CHIPID_PARTID(sc->sc_chip_id)) {
+        case PARTID_Am79c970:
+            return "Am79c970 PCnet-PCI / Am79c965 PCnet-32"; /* since id is shared */
+        case PARTID_Am79c970A:
+            return "Am79c970A PCnet-PCI II";
+        case PARTID_Am79c971:
+            return "Am79c971 PCnet-FAST";
+        case PARTID_Am79c972:
+            return "Am79c972 PCnet-FAST+";
+        case PARTID_Am79c973:
+            return "Am79c973 PCnet-FAST III";
+        case PARTID_Am79c975:
+            return "Am79c975 PCnet-FAST III";
+        default:
+            return "Unknown PCnet-PCI variant";
+    }
+}
+
 
 /*
  * Determine which chip is present on the card.
@@ -471,6 +697,15 @@ leattach(/*parent,*/ self, aux)
 
 	printf("%s: type %s\n", sc->sc_dev.dv_xname, card_type[sc->sc_card]);
 
+    sc->sc_chip_id = 0;
+    sc->sc_have_mii_support = 0;
+
+    if (sc->sc_card == NE2100) {
+	    sc->sc_chip_id = le_read_chip_id(sc);
+	    sc->sc_have_mii_support = le_have_mii_support(sc);
+        printf("%s:  chip %s (mii support=%d)\n", sc->sc_dev.dv_xname, le_chip_name(sc), sc->sc_have_mii_support);
+    }
+
 #if NISA > 0
 	if (1 /* parent->dv_cfdata->cf_driver == &isacd */) {
 		struct isa_attach_args *ia = aux;
@@ -505,6 +740,7 @@ leattach(/*parent,*/ self, aux)
 		    PCI_COMMAND_MASTER_ENABLE);
 
 		/* sc->sc_ih = pci_map_int(pa->pa_tag, PCI_IPL_NET, leintr, sc); */
+		printf("leaix: the other one, setting up leintredge on irq %d\n", ia->ia_irq);
 		intrattach(leintredge, ia->ia_irq, SPL_IMP); 
 	}
 #endif

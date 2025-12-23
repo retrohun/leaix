@@ -353,7 +353,7 @@ leaixinit(dev_t dev)
 
 	printf("\n");
 	printf("AMD PCnet driver     github.com/rakslice/leaix\n");
-	printf("version 0.0.5 - experimental - use at own risk\n");
+	printf("version 0.0.6 - experimental - use at own risk\n");
 
 	devnum = 0;
 
@@ -443,6 +443,25 @@ void delayloop(int usec) {
 	for (i = ITERATIONS_PER_USEC * usec; i > 0; i--);
 }
 
+void
+leasel(register struct le_softc *sc)
+{
+	int miipd = (lerdbcr(sc, 32) & 0x4000) != 0;
+	if (miipd) {
+        printf("leaix: mii present=%d\n", miipd);
+        printf("leaix: clear ASEL\n");
+        /* disable automatic network port selection */
+        lewrbcr(sc, LE_BCR_MC, lerdbcr(sc, LE_BCR_MC) & ~LE_BCR_MC_ASEL);
+        printf("leaix: set DANAS\n");
+        lewrbcr(sc, 32, lerdbcr(sc, 32) | 0x80);
+        printf("leaix: setting PORTSEL for MII\n");
+        //set CSR15 bits 7-8 to 0b11
+        lewrcsr(sc, 15, lerdcsr(sc, 15) | 0x0180);
+
+        mii_attach(sc);
+	}
+}
+
 /*
  * Initialization of interface; set up initialization block
  * and transmit/receive descriptor rings.
@@ -460,6 +479,10 @@ leinit(register struct le_softc *sc)
 
 	lewrcsr(sc, LE_CSR0, LE_C0_STOP);
 	LE_DELAY(100);
+
+    if (sc->sc_have_mii_support) {
+	    leasel(sc);
+    }
 
 	/* Set the correct byte swapping mode, etc. */
 	lewrcsr(sc, LE_CSR3, sc->sc_conf3);
@@ -490,6 +513,8 @@ leinit(register struct le_softc *sc)
 			break;
 
 	if (lerdcsr(sc, LE_CSR0) & LE_C0_IDON) {
+
+
 		/* Start the LANCE. */
 		lewrcsr(sc, LE_CSR0, LE_C0_INEA | LE_C0_STRT | LE_C0_IDON);
 		ifp->if_flags |= IFF_RUNNING;

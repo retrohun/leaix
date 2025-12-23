@@ -176,3 +176,8 @@ struct leinit {
 
 #define	LE_T3_BITS \
     "\20\20BUFF\17UFLO\16RES\15LCOL\14LCAR\13RTRY"
+
+/* bus config regs */
+
+#define LE_BCR_MC 2 /* miscellaneous config */
+#define LE_BCR_MC_ASEL 0x0002 /* Automatic Network Port Selection, BCR2 bit 1 */
