@@ -36,6 +36,7 @@ cd /
 name=`uname -n`
 
 /bin/sed -n '/^'$DEVICENAME':/,/^[  ]*$/d
+/^leaix_default_irq:/,/^[  ]*$/d
 p' < $MASTER > /tmp/master.tmp 2> /dev/null
 
 majnum=44;
@@ -61,6 +62,10 @@ leaix:  type = dev
 	prefix = leaix
 	major = $majnum
 	character = TRUE
+
+leaix_default_irq:  type = parm
+	patchaddr = leaix_default_irq
+	default = 9
 
 !
 echo Backing up /etc/system to /etc/system.orig

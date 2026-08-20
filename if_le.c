@@ -534,6 +534,9 @@ le_have_mii_support(sc)
 	struct le_softc *sc;
 {
     switch (CHIPID_PARTID(sc->sc_chip_id)) {
+        case PARTID_Am79c960:
+        case PARTID_Am79c961:
+        case PARTID_Am79c961A:
         case PARTID_Am79c970:
         case PARTID_Am79c970A:
             return 0;
@@ -554,6 +557,12 @@ le_chip_name(sc)
 	struct le_softc *sc;
 {
     switch (CHIPID_PARTID(sc->sc_chip_id)) {
+        case PARTID_Am79c960:
+            return "Am79c960 PCnet-ISA";
+        case PARTID_Am79c961:
+            return "Am79c961 PCnet-ISA+";
+        case PARTID_Am79c961A:
+            return "Am79c961A PCnet-ISA II";
         case PARTID_Am79c970:
             return "Am79c970 PCnet-PCI / Am79c965 PCnet-32"; /* since id is shared */
         case PARTID_Am79c970A:
@@ -567,7 +576,7 @@ le_chip_name(sc)
         case PARTID_Am79c975:
             return "Am79c975 PCnet-FAST III";
         default:
-            return "Unknown PCnet-PCI variant";
+            return "Unknown PCnet variant";
     }
 }
 

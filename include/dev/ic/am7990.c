@@ -343,17 +343,26 @@ lestop(sc)
 	lewrcsr(sc, LE_CSR0, LE_C0_STOP);
 }
 
+int le_isa_probe_io_addresses[] = {0x200, 0x220, 0x240, 0x260, 0x280, 0x2A0, 0x2C0, 0x2E0,
+                                0x300, 0x320, 0x340, 0x360, 0x380, 0x3A0, 0x3C0, 0x3E0,
+                                NULL};
+
+int leaix_default_irq = 9;
+
+
 int
 leaixinit(dev_t dev)
 {
-        struct le_softc *sc;
+	struct le_softc *sc;
 	struct isa_attach_args *ia;
 	int devnum;
 	pci_address_t pciaddr;
+	int *isa_probe_io_address_ptr;
+	u_int16_t reg_val;
 
 	printf("\n");
 	printf("AMD PCnet driver     github.com/rakslice/leaix\n");
-	printf("version 0.0.6 - experimental - use at own risk\n");
+	printf("version 0.0.7 - experimental - use at own risk\n");
 
 	devnum = 0;
 
@@ -375,8 +384,67 @@ leaixinit(dev_t dev)
 	pciaddr = find_first_pci_dev(ids_of_interest);
 
 	if (pci_not_found(pciaddr)) {
-		printf("leaix: card not found\n");
-		return 1;
+		printf("leaix: PCI card not found\n");
+
+		printf("leaix: Probing for ISA card\n");
+
+		for (isa_probe_io_address_ptr = le_isa_probe_io_addresses; *isa_probe_io_address_ptr != 0; isa_probe_io_address_ptr++) {
+			ia->ia_iobase = *isa_probe_io_address_ptr;
+			printf("  0x%x   \r", ia->ia_iobase);
+			if (leprobe(sc, ia)) {
+				break;
+			}
+		}
+		printf("\r");
+
+		if (*isa_probe_io_address_ptr == 0) {
+			printf("leaix: ISA card not found\n");
+			return 1;
+		}
+
+		printf("leaix: Using io=0x%x (autodetected)\n", ia->ia_iobase);
+
+		ia->ia_irq = 0;
+
+		if (sc->sc_card == NE2100) {
+			sc->sc_chip_id = le_read_chip_id(sc);
+
+			if ((CHIPID_PARTID(sc->sc_chip_id) == PARTID_Am79c960) ||
+				/* Am79c960 is here because this is what 86box misreports for its pcnet-isa+ (pnp) */
+				(CHIPID_PARTID(sc->sc_chip_id) == PARTID_Am79c961) ||
+				(CHIPID_PARTID(sc->sc_chip_id) == PARTID_Am79c961A) ) {
+					/* card supports isa-pnp, so we can get an attempt to get an irq from the pnp info */
+
+					reg_val = lerdbcr(sc, 8);
+	#if DEBUG_OUTPUT
+					printf("leaix: got isacsr8 0x%02x\n", reg_val);
+	#endif
+
+					if (reg_val != 0xffff) {
+						ia->ia_irq = (reg_val >> 4) & 0xf;
+						if ((ia->ia_irq >= 2) && (ia->ia_irq != 8) && (ia->ia_irq != 13)) {
+							printf("leaix: Using irq=%d (from pnp)\n", ia->ia_irq);
+						} else {
+							printf("leaix: Ignoring bogus irq=%d (from pnp)\n", ia->ia_irq);
+							ia->ia_irq = 0;
+						}
+					}
+			}
+		}
+
+		if (ia->ia_irq == 0) {
+			ia->ia_irq = leaix_default_irq;
+
+			if (ia->ia_irq == 2) {
+	#if DEBUG_OUTPUT
+				printf("2 to 9\n");
+	#endif
+				ia->ia_irq = 9;
+			}
+
+			printf("leaix: Using irq=%d (from sysparm leaix_default_irq)\n", ia->ia_irq);
+		}
+
 	} else {
 		uint32_t conf;
 		uint32_t new_iobase;
@@ -421,13 +489,14 @@ leaixinit(dev_t dev)
 #if DEBUG_OUTPUT
 		printf("Using io=0x%04x irq=%d\n", ia->ia_iobase, ia->ia_irq);
 #endif
-	}
 
 #if DEBUG_OUTPUT
 	printf("usec per tick %d\n", usec_per_tick);
 	printf("leprobe\n");
 #endif
         leprobe(sc, ia);
+	}
+
 #if DEBUG_OUTPUT
 	printf("leattach\n");
 #endif
